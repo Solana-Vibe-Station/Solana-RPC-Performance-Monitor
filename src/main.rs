@@ -372,7 +372,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest_service("/static", get_service(ServeDir::new("static")))
         .with_state(db);
     
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
     println!("Server running on http://localhost:3000");
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
