@@ -1,0 +1,7 @@
+[rpc]
+endpoints = [
+    "https://api.mainnet-beta.solana.com",
+    "https://api.devnet.solana.com",
+    "https://solana-api.projectserum.com",
+    "https://rpc.ankr.com/solana"
+]
