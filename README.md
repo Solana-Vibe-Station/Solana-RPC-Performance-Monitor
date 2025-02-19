@@ -1,14 +1,16 @@
 # Solana RPC Performance Monitor
 
-This Rust project **monitors multiple Solana RPC endpoints**, fetching and storing the response times and block height, while also calculating consensus metrics.
+This project compares the response time of multiple RPC endpoints and then plots the results on a graph. A live example site can be checked out here: https://monitor.solanavibestation.com
 
 
+
+![image](https://github.com/user-attachments/assets/fe79337e-4bd8-435c-9bcb-71f2fbff2082)
 
 
 
 ## 🚀 Features
 - **Monitors multiple Solana RPCs concurrently** (async, non-blocking)
-- **Stores RPC metrics in RocksDB** for historical analysis
+- **Stores 1 hour of RPC metrics**
 - **Calculates RPC response time metrics and visualizes this data on a time chart**
 - **Web UI served with Axum** (`/static/index.html`)
 
@@ -87,13 +89,6 @@ A **basic web interface** is available at:
 ```sh
 http://localhost:3000/static/index.html
 ```
-If missing, generate the static directory:
-```sh
-mkdir static
-echo '<h1>Solana RPC Monitoring</h1>' > static/index.html
-```
-
----
 
 ## 🛠 Troubleshooting
 
@@ -102,11 +97,6 @@ echo '<h1>Solana RPC Monitoring</h1>' > static/index.html
 
 ### **❌ `Server not starting`**
 **Fix:** Check if port **3000** is free or specify another:
-```sh
-SERVER_PORT=4000 cargo run
-```
-
----
 
 ## 📜 License
 This project is licensed under the **MIT License**.
@@ -119,6 +109,7 @@ Feel free to submit issues or pull requests to improve this project!
 ---
 
 ## 🔗 Resources
+- [Solana Vibe Station](https://www.solanavibestation.com/)
 - [Solana Documentation](https://docs.solana.com/)
 - [Rust Async Book](https://rust-lang.github.io/async-book/)
 - [Axum Documentation](https://docs.rs/axum/latest/axum/)
