@@ -55,15 +55,36 @@ endpoints = [
     { url = "https://solana-api.projectserum.com", nickname = "ProjectSerum" },
     { url = "https://rpc.ankr.com/solana", nickname = "Ankr" }
 ]
+
+[server]
+listen_ip = "0.0.0.0"
+port = 3000
+
 ```
 - You can **add/remove** endpoints as needed.
 - Each endpoint must have a **nickname** for easier identification.
+- You can set the ip and port or leave at default
 
 ---
 
 ## ▶️ Running the Program
 
 Run the program with:
+```sh
+cargo run
+```
+
+You can overide the host with the below:
+```sh
+cargo run -- --listen-ip 127.0.0.1 --port 5000
+```
+
+Use this for quick build:
+```sh
+cargo check
+```
+
+Then run:
 ```sh
 cargo run
 ```
