@@ -1,9 +1,12 @@
+use axum::{
+    extract::{Query, State},
+    Json,
+};
+use rocksdb::DB;
 use std::collections::HashMap;
 use std::sync::Arc;
-use axum::{extract::{Query, State}, Json};
-use rocksdb::DB;
 
-use crate::models::{RPCResponse, LeaderboardEntry, ConsensusStats};
+use crate::models::{ConsensusStats, LeaderboardEntry, RPCResponse};
 
 pub fn calculate_consensus(responses: &[RPCResponse]) -> ConsensusStats {
     if responses.is_empty() {
@@ -29,7 +32,9 @@ pub fn calculate_consensus(responses: &[RPCResponse]) -> ConsensusStats {
     let total_rpcs = responses.len();
 
     for response in responses {
-        *blockhash_counts.entry(response.blockhash.clone()).or_insert(0) += 1;
+        *blockhash_counts
+            .entry(response.blockhash.clone())
+            .or_insert(0) += 1;
         *slot_counts.entry(response.slot).or_insert(0) += 1;
     }
 
@@ -47,15 +52,9 @@ pub fn calculate_consensus(responses: &[RPCResponse]) -> ConsensusStats {
 
     let consensus_percentage = (consensus_blockhash.1 as f64 / total_rpcs as f64) * 100.0;
 
-    let fastest = responses
-        .iter()
-        .min_by_key(|r| r.latency_ms)
-        .unwrap();
+    let fastest = responses.iter().min_by_key(|r| r.latency_ms).unwrap();
 
-    let slowest = responses
-        .iter()
-        .max_by_key(|r| r.latency_ms)
-        .unwrap();
+    let slowest = responses.iter().max_by_key(|r| r.latency_ms).unwrap();
 
     let slot_difference = fastest.slot as i64 - slowest.slot as i64;
     let slot_skew = if slot_difference == 0 {
@@ -66,12 +65,11 @@ pub fn calculate_consensus(responses: &[RPCResponse]) -> ConsensusStats {
         format!("Slowest ahead by {} slots", slot_difference.abs())
     };
 
-    let average_latency = responses
-        .iter()
-        .map(|r| r.latency_ms as f64)
-        .sum::<f64>() / total_rpcs as f64;
+    let average_latency =
+        responses.iter().map(|r| r.latency_ms as f64).sum::<f64>() / total_rpcs as f64;
 
-    let mut latency_leaderboard: Vec<LeaderboardEntry> = responses.iter()
+    let mut latency_leaderboard: Vec<LeaderboardEntry> = responses
+        .iter()
         .map(|r| LeaderboardEntry {
             nickname: r.nickname.clone(),
             value: r.latency_ms as u64,
@@ -82,7 +80,8 @@ pub fn calculate_consensus(responses: &[RPCResponse]) -> ConsensusStats {
     latency_leaderboard.sort_by_key(|entry| entry.value);
     latency_leaderboard.truncate(4);
 
-    let mut slot_leaderboard: Vec<LeaderboardEntry> = responses.iter()
+    let mut slot_leaderboard: Vec<LeaderboardEntry> = responses
+        .iter()
         .map(|r| LeaderboardEntry {
             nickname: r.nickname.clone(),
             value: r.slot,
@@ -135,7 +134,9 @@ pub async fn get_metrics(
                         .as_ref()
                         .map_or(true, |filter| url.contains(filter.as_str()));
                     let matches_time = match (from_ts, to_ts) {
-                        (Some(from), Some(to)) => response.timestamp >= from as f64 && response.timestamp <= to as f64,
+                        (Some(from), Some(to)) => {
+                            response.timestamp >= from as f64 && response.timestamp <= to as f64
+                        }
                         (Some(from), None) => response.timestamp >= from as f64,
                         (None, Some(to)) => response.timestamp <= to as f64,
                         (None, None) => true,
@@ -149,7 +150,11 @@ pub async fn get_metrics(
         }
     }
 
-    responses.sort_by(|a, b| b.timestamp.partial_cmp(&a.timestamp).unwrap_or(std::cmp::Ordering::Equal));
+    responses.sort_by(|a, b| {
+        b.timestamp
+            .partial_cmp(&a.timestamp)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let consensus_stats = calculate_consensus(&latest_by_rpc.values().cloned().collect::<Vec<_>>());
 

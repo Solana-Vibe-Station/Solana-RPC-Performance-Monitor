@@ -1,11 +1,14 @@
-use std::sync::Arc;
-use std::time::Instant;
+use crate::models::{RPCResponse, RpcEndpoint};
 use chrono::Utc;
 use rocksdb::DB;
 use solana_client::rpc_client::RpcClient;
-use crate::models::{RPCResponse, RpcEndpoint};
+use std::sync::Arc;
+use std::time::Instant;
 
-pub async fn fetch_blockhash_and_slot(endpoint: RpcEndpoint, db: Arc<DB>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn fetch_blockhash_and_slot(
+    endpoint: RpcEndpoint,
+    db: Arc<DB>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let client = RpcClient::new(endpoint.url.clone());
     let start_time = Instant::now();
 
@@ -17,14 +20,20 @@ pub async fn fetch_blockhash_and_slot(endpoint: RpcEndpoint, db: Arc<DB>) -> Res
     let slot = match client.get_slot() {
         Ok(slot) => slot,
         Err(_) => {
-            println!("Error fetching slot from {}: request failed", endpoint.nickname);
+            println!(
+                "Error fetching slot from {}: request failed",
+                endpoint.nickname
+            );
             0
         }
     };
 
     let latency = start_time.elapsed().as_millis();
     let response = RPCResponse {
-        timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64(),
         slot,
         blockhash: blockhash.clone(),
         latency_ms: latency,
@@ -36,6 +45,9 @@ pub async fn fetch_blockhash_and_slot(endpoint: RpcEndpoint, db: Arc<DB>) -> Res
     let value = serde_json::to_string(&response)?;
     db.put(key.as_bytes(), value.as_bytes())?;
 
-    println!("[{}] Slot: {}, Blockhash: {} ({}ms)", endpoint.nickname, slot, blockhash, latency);
+    println!(
+        "[{}] Slot: {}, Blockhash: {} ({}ms)",
+        endpoint.nickname, slot, blockhash, latency
+    );
     Ok(())
 }

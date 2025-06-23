@@ -1,443 +1,104 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 
 <head>
     <title>RPC Monitor Dashboard</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+        };
+    </script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-    <style>
-        @keyframes pulse {
-            0% {
-                opacity: 1;
-            }
-
-            50% {
-                opacity: 0.5;
-            }
-
-            100% {
-                opacity: 1;
-            }
-        }
-
-        .updating {
-            animation: pulse 1s infinite;
-        }
-
-        @keyframes highlight {
-            0% {
-                background-color: transparent;
-            }
-
-            50% {
-                background-color: rgba(59, 130, 246, 0.1);
-            }
-
-            100% {
-                background-color: transparent;
-            }
-        }
-
-        .new-record {
-            animation: highlight 1s ease-in-out;
-        }
-
-        .legend-item {
-            cursor: pointer;
-        }
-    </style>
-    <script>
-        let updating = false;
-        let previousValues = {};
-        let responseTimeChart;
-        let hiddenDatasets = {};
-
-        const colors = [
-            'rgba(255, 99, 132, 1)',
-            'rgba(54, 162, 235, 1)',
-            'rgba(255, 206, 86, 1)',
-            'rgba(75, 192, 192, 1)',
-            'rgba(153, 102, 255, 1)',
-            'rgba(255, 159, 64, 1)'
-        ];
-
-        const nicknameColorMap = {};
-
-        function updateWithFade(elementId, value) {
-            const element = document.getElementById(elementId);
-            element.style.opacity = '0';
-            setTimeout(() => {
-                element.textContent = value;
-                element.style.opacity = '1';
-            }, 150);
-        }
-
-        function updateLeaderboard(elementId, data, formatFn, title) {
-            const element = document.getElementById(elementId);
-            let html = `<h3 class="text-lg font-semibold mb-2">${title}</h3>`;
-
-            if (title === 'Highest Slots') {
-                data = data.map(entry => {
-                    return entry.latency_ms > 200 ? { ...entry, value: entry.value - 1 } : entry;
-                });
-                data.sort((a, b) => {
-                    if (b.value === a.value) {
-                        return a.latency_ms - b.latency_ms;
-                    }
-                    return b.value - a.value;
-                });
-            }
-            data.forEach((entry, index) => {
-                let timeStr = '';
-                // Only set the time string if entry.timestamp is defined
-                if (entry.timestamp) {
-                    const date = new Date(entry.timestamp * 1000);
-                    timeStr = date.toLocaleTimeString() + '.' + date.getMilliseconds().toString().padStart(3, '0');
-                }
-                const isNewRecord = previousValues[elementId + index] !== entry.value;
-                const highlightClass = isNewRecord ? 'new-record' : '';
-                previousValues[elementId + index] = entry.value;
-
-                html += `
-            <div class="flex items-center justify-between mb-2 ${highlightClass} ${index === 0 ? 'text-green-600 font-medium' : ''} p-2 rounded">
-                <span class="flex-grow">${index + 1}. ${formatFn(entry)}</span>
-                <span class="text-sm text-gray-500">${timeStr}</span>
-            </div>
-        `;
-            });
-
-            element.innerHTML = html;
-        }
-
-        function updateYAxisMax() {
-            const visibleDatasets = responseTimeChart.data.datasets.filter(dataset => !dataset.hidden);
-            const maxLatency = Math.max(...visibleDatasets.flatMap(dataset => dataset.data.map(point => point.y)));
-            responseTimeChart.options.scales.y.max = maxLatency * 1.1;
-            responseTimeChart.update();
-        }
-
-        async function fetchData() {
-            if (updating) return;
-            updating = true;
-            requestCount++;
-
-            document.getElementById('updateIndicator').classList.add('updating');
-
-            try {
-
-                let url = '/api/metrics?';
-
-                const response = await fetch(url);
-                const [data, consensus] = await response.json();
-
-                console.log('Fetched data:', data);
-                console.log('Consensus data:', consensus);
-
-                // Update consensus information
-                updateWithFade('fastestRPC', `${consensus.fastest_rpc} (${consensus.fastest_latency}ms)`);
-                updateWithFade('slowestRPC', `${consensus.slowest_rpc} (${consensus.slowest_latency}ms)`);
-                updateWithFade('consensusBlockhash', consensus.consensus_blockhash);
-                updateWithFade('consensusSlot', consensus.consensus_slot);
-                updateWithFade('consensusPercentage', consensus.consensus_percentage.toFixed(1) + '%');
-                updateWithFade('averageLatency', ((consensus.slowest_latency - consensus.fastest_latency) / consensus.slowest_latency * 100).toFixed(2) + '%');
-                updateWithFade('slotDifference', consensus.slot_skew);
-
-                // Update leaderboards
-                updateLeaderboard('latencyLeaderboard', consensus.latency_leaderboard,
-                    entry => `${entry.nickname}: ${entry.value}ms`,
-                    'Fastest Response Times');
-                // Calculate average response time per endpoint from raw data
-                const nicknames = [...new Set(data.map(item => item.nickname))].sort();
-                const avgResponseTimes = nicknames.map(nickname => {
-                    const endpointData = data.filter(item => item.nickname === nickname);
-                    const totalLatency = endpointData.reduce((sum, item) => sum + item.latency_ms, 0);
-                    const avgLatency = endpointData.length > 0 ? totalLatency / endpointData.length : 0;
-                    return {
-                        nickname,
-                        averageLatency: avgLatency
-                    };
-                });
-
-                // Sort by lowest average response time first
-                avgResponseTimes.sort((a, b) => a.averageLatency - b.averageLatency);
-
-
-                // Update leaderboard with average response times
-                updateLeaderboard('slotLeaderboard', avgResponseTimes,
-                    entry => `${entry.nickname}: ${entry.averageLatency.toFixed(2)}ms`,
-                    'Average Response Times');
-
-                // Update graph
-                const datasets = nicknames.map((nickname, index) => {
-                    if (!nicknameColorMap[nickname]) {
-                        nicknameColorMap[nickname] = colors[index % colors.length];
-                    }
-                    const color = nicknameColorMap[nickname];
-                    return {
-                        label: nickname,
-                        data: data.filter(item => item.nickname === nickname).map(item => ({
-                            x: new Date(item.timestamp * 1000),
-                            y: item.latency_ms
-                        })),
-                        borderColor: color,
-                        backgroundColor: color.replace('1)', '0.2)'),
-                        borderWidth: 2,
-                        pointRadius: 0,
-                        hidden: hiddenDatasets[nickname] || false
-                    };
-                });
-
-                if (responseTimeChart) {
-                    responseTimeChart.data.datasets = datasets;
-                    responseTimeChart.update();
-                } else {
-                    const ctx = document.getElementById('responseTimeChart').getContext('2d');
-                    responseTimeChart = new Chart(ctx, {
-                        type: 'line',
-                        data: {
-                            datasets: datasets
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                                legend: {
-                                    display: false
-                                },
-                                title: {
-                                    display: true,
-                                    text: 'Response Times'
-                                }
-                            },
-                            scales: {
-                                x: {
-                                    type: 'time',
-                                    time: {
-                                        unit: 'minute'
-                                    },
-                                    title: {
-                                        display: true,
-                                        text: 'Time'
-                                    }
-                                },
-                                y: {
-                                    title: {
-                                        display: true,
-                                        text: 'Response Time (ms)'
-                                    },
-                                    beginAtZero: true,
-                                    max: Math.max(...datasets.flatMap(dataset => dataset.data.map(point => point.y))) * 1.1
-                                }
-                            }
-                        }
-                    });
-                }
-
-                // Debugging statements
-                console.log('Chart Data:', responseTimeChart.data.datasets);
-                responseTimeChart.data.datasets.forEach(dataset => {
-                    console.log(`Dataset ${dataset.label} hidden:`, dataset.hidden);
-                });
-                console.log('Hidden Datasets:', hiddenDatasets);
-
-                // Update legend
-                const legend = document.getElementById('legend');
-                legend.innerHTML = '';
-                nicknames.forEach((nickname, index) => {
-                    const color = nicknameColorMap[nickname];
-                    const legendItem = document.createElement('div');
-                    legendItem.className = 'legend-item flex items-center';
-                    legendItem.innerHTML = `
-                        <div class="w-4 h-4 mr-2" style="background-color: ${color};"></div>
-                        <span>${nickname}</span>
-                    `;
-                    legendItem.onclick = () => {
-                        const dataset = responseTimeChart.data.datasets.find(ds => ds.label === nickname);
-                        console.log(`Toggling visibility for ${nickname}`);
-                        dataset.hidden = !dataset.hidden;
-                        hiddenDatasets[nickname] = dataset.hidden;
-                        updateYAxisMax();
-                        console.log(`Toggled ${nickname} hidden state to:`, dataset.hidden);
-                    };
-                    legend.appendChild(legendItem);
-                });
-
-                document.getElementById('status').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
-            } catch (error) {
-                console.error('Error fetching data:', error);
-                document.getElementById('status').textContent = 'Error updating data';
-            } finally {
-                updating = false;
-                document.getElementById('updateIndicator').classList.remove('updating');
-            }
-        }
-
-        // Track request rate
-        let requestCount = 0;
-        let lastRateUpdate = Date.now();
-
-        function updateRequestRate() {
-            const now = Date.now();
-            const elapsed = (now - lastRateUpdate) / 1000;
-            const rate = requestCount / elapsed;
-            document.getElementById('requestRate').textContent =
-                `${rate.toFixed(1)} requests/sec`;
-            requestCount = 0;
-            lastRateUpdate = now;
-        }
-
-        let autoRefresh = true;
-        let refreshInterval;
-
-        function toggleRefresh() {
-            autoRefresh = !autoRefresh;
-            const button = document.getElementById('refreshToggle');
-            const indicator = document.getElementById('updateIndicator');
-
-            if (autoRefresh) {
-                refreshInterval = setInterval(fetchData, 5000);
-                button.textContent = 'Pause Updates';
-                button.classList.remove('bg-green-500');
-                button.classList.add('bg-red-500');
-                indicator.classList.remove('hidden');
-            } else {
-                clearInterval(refreshInterval);
-                button.textContent = 'Resume Updates';
-                button.classList.remove('bg-red-500');
-                button.classList.add('bg-green-500');
-                indicator.classList.add('hidden');
-            }
-        }
-
-        // Initialize
-        document.addEventListener('DOMContentLoaded', () => {
-            fetchData();
-            refreshInterval = setInterval(fetchData, 5000);
-            setInterval(updateRequestRate, 1000);
-        });
-    </script>
+    <!-- ✅ Link to external stylesheet -->
+    <link rel="stylesheet" href="/static/styles.css" />
 </head>
 
-<body class="bg-gray-100 p-4 md:p-8">
+<body class="bg-gray-100 dark:bg-gray-900 dark:text-white p-4 md:p-8">
     <div class="max-w-7xl mx-auto">
-        
+
         <div class="flex justify-between items-center mb-6">
             <!-- Left group: Logo and header texts -->
             <div class="flex items-center mr-4">
-              <!-- Logo -->
-              <div class="mr-4">
-                <?xml version="1.0" encoding="utf-8"?>
-                <!-- Generator: Adobe Illustrator 26.0.1, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->
-                <svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg"
-                    xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="400 300 800 600"
-                    preserveAspectRatio="xMidYMid slice" style="enable-background:new 0 0 1600 1200;"
-                    xml:space="preserve" class="h-20 w-auto">
-                    <style type="text/css">
-                        .st0 {
-                            fill: url(#SVGID_1_);
-                        }
-
-                        .st1 {
-                            fill: url(#SVGID_00000169528464310508651950000002350045214783221914_);
-                        }
-                    </style>
-                    <g>
-                        <linearGradient id="SVGID_1_" gradientUnits="userSpaceOnUse" x1="811.3968" y1="363.2458"
-                            x2="799.5787" y2="876.1487">
-                            <stop offset="0" style="stop-color:#F954D1" />
-                            <stop offset="0.2779" style="stop-color:#B53DFB" />
-                            <stop offset="0.6397" style="stop-color:#2B62FD" />
-                            <stop offset="1" style="stop-color:#2BB9FD" />
-                        </linearGradient>
-                        <path class="st0" d="M899.3,753.4l-56.8-56.8l-22.5-22.5l-5.9-5.9v0L800,654.1l0,0l0,0l-14.2,14.2v0l-5.9,5.9l-22.5,22.5l0,0v0
-                    L729,725.1v0l-28.4,28.4l0,0v0l-28.4,28.4v0l-28.4,28.4l-28.2,28.2c-0.2,0.2-0.3,0.4-0.3,0.6v37.7c0,0.8,1,1.2,1.5,0.6l26.9-26.9
-                    l26.9-26.9c0.6-0.6,1.5-0.2,1.5,0.6v83c0,0.5,0.4,0.9,0.9,0.9h26.7c0.5,0,0.9-0.4,0.9-0.9V793.6l0,0l26.9-26.9
-                    c0.6-0.6,1.5-0.2,1.5,0.6v139.8c0,0.5,0.4,0.9,0.9,0.9h26.6c0.5,0,0.9-0.4,0.9-0.9V736.8l0,0l26.9-26.9c0.6-0.6,1.5-0.2,1.5,0.6
-                    v196.6c0,0.5,0.4,0.9,0.9,0.9h26.6c0.5,0,0.9-0.4,0.9-0.9V710.5c0-0.8,1-1.2,1.5-0.6l26.6,26.6c0.2,0.2,0.3,0.4,0.3,0.6v169
-                    c0,0.5,0.4,0.9,0.9,0.9h26.6c0.5,0,0.9-0.4,0.9-0.9V767.3c0-0.8,1-1.2,1.5-0.6l26.6,26.6c0.2,0.2,0.3,0.4,0.3,0.6v113.3
-                    c0,0.5,0.4,0.9,0.9,0.9h26.7c0.5,0,0.9-0.4,0.9-0.9v-83.1c0-0.8,1-1.2,1.5-0.6l53.8,53.8c0.6,0.6,1.5,0.2,1.5-0.6V839
-                    c0-0.2-0.1-0.5-0.3-0.6l-56.6-56.6L899.3,753.4z" />
-                        <linearGradient id="SVGID_00000101097375152033808340000009349513470710638211_"
-                            gradientUnits="userSpaceOnUse" x1="809.5114" y1="363.2024" x2="797.6934" y2="876.1053">
-                            <stop offset="0" style="stop-color:#F954D1" />
-                            <stop offset="0.2779" style="stop-color:#B53DFB" />
-                            <stop offset="0.6397" style="stop-color:#2B62FD" />
-                            <stop offset="1" style="stop-color:#2BB9FD" />
-                        </linearGradient>
-                        <path style="fill:url(#SVGID_00000101097375152033808340000009349513470710638211_);"
-                            d="M927.8,699.6v-93.6c0-0.2-0.1-0.4-0.2-0.6
-                    l-26.7-32.3c-0.5-0.6-1.6-0.3-1.6,0.6v95.7c0,0.8-1,1.2-1.5,0.6l-26.6-26.6c-0.2-0.2-0.3-0.4-0.3-0.6V466.6
-                    c0-0.2-0.1-0.4-0.2-0.6l-26.6-32.3c-0.5-0.6-1.6-0.3-1.6,0.6v178.3c0,0.8-1,1.2-1.5,0.6l-21-21v0l-5.6-5.6
-                    c-0.2-0.2-0.3-0.4-0.3-0.6V309c0-0.2-0.1-0.4-0.2-0.6l-13.3-16.2c-0.4-0.4-1-0.4-1.4,0L786,308.4c-0.1,0.2-0.2,0.4-0.2,0.6v277
-                    c0,0.2-0.1,0.5-0.3,0.6l-5.6,5.6l-22.5,22.5l0,0V435.3c0-0.8-1-1.2-1.6-0.6L729.2,467c-0.1,0.2-0.2,0.4-0.2,0.6v175.2
-                    c0,0.2-0.1,0.5-0.3,0.6l-28.1,28.1l0,0v-97.9c0-0.8-1-1.2-1.6-0.6l-26.7,32.3c-0.1,0.2-0.2,0.4-0.2,0.6v93.7
-                    c0,0.2-0.1,0.5-0.3,0.6l-56.3,56.3c-0.2,0.2-0.3,0.4-0.3,0.6v37.7c0,0.8,1,1.2,1.5,0.6l26.9-26.9l28.4-28.4
-                    l28.4-28.4l98.7-98.7c0.3-0.3,0.9-0.3,1.2,0l13.6,13.6l28.4,28.4v0l28.4,28.4v0l28.4,28.4v0l28.4,28.4v0l55.3,55.3
-                    c0.6,0.6,1.5,0.2,1.5-0.6v-37.7c0-0.2-0.1-0.5-0.3-0.6L928,700.2C927.8,700,927.8,699.8,927.8,699.6z" />
-                    </g>
-                </svg>
-              </div>
-              <!-- Header Texts -->
-              <div class="flex flex-col">
-                <h1 class="text-2xl md:text-3xl font-bold">RPC Monitoring Dashboard</h1>
-                <a href="https://www.solanavibestation.com" class="text-sm text-gray-500 hover:underline">
-                  Powered by Solana Vibe Station
-                </a>
-                <!-- Discord Link -->
-                <a href="https://discord.gg/dQ9nmAavkB" target="_blank" class="inline-flex items-center mt-1">
-                  <!-- Discord Icon -->
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
-                       class="bi bi-discord" viewBox="0 0 16 16">
-                    <path d="M13.545 2.907a13.2 13.2 0 0 0-3.257-1.011.05.05 0 0 0-.052.025c-.141.25-.297.577-.406.833a12.2 12.2 0 0 0-3.658 0 8 8 0 0 0-.412-.833.05.05 0 0 0-.052-.025c-1.125.194-2.22.534-3.257 1.011a.04.04 0 0 0-.021.018C.356 6.024-.213 9.047.066 12.032q.003.022.021.037a13.3 13.3 0 0 0 3.995 2.02.05.05 0 0 0 .056-.019q.463-.63.818-1.329a.05.05 0 0 0-.01-.059l-.018-.011a9 9 0 0 1-1.248-.595.05.05 0 0 1-.02-.066l.015-.019q.127-.095.248-.195a.05.05 0 0 1 .051-.007c2.619 1.196 5.454 1.196 8.041 0a.05.05 0 0 1 .053.007q.121.1.248.195a.05.05 0 0 1-.004.085 8 8 0 0 1-1.249.594.05.05 0 0 0-.03.03.05.05 0 0 0 .003.041c.24.465.515.909.817 1.329a.05.05 0 0 0 .056.019 13.2 13.2 0 0 0 4.001-2.02.05.05 0 0 0 .021-.037c.334-3.451-.559-6.449-2.366-9.106a.03.03 0 0 0-.02-.019"/>
-                  </svg>
-                  <span class="ml-2 text-sm text-blue-600 hover:underline">Join our Discord</span>
-                </a>
-              </div>
+                <!-- Logo -->
+                <div class="mr-4">
+                    <img src="/static/logo.svg" alt="Logo" class="h-20 w-auto" />
+                </div>
+                <!-- Header Texts -->
+                <div class="flex flex-col">
+                    <h1 class="text-2xl md:text-3xl font-bold">RPC Monitoring Dashboard</h1>
+                    <a href="https://www.solanavibestation.com" class="text-sm text-gray-500 hover:underline">
+                        Powered by Solana Vibe Station
+                    </a>
+                    <!-- Discord Link -->
+                    <a href="https://discord.gg/dQ9nmAavkB" target="_blank" class="inline-flex items-center mt-1">
+                        <!-- Discord Icon -->
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
+                            class="bi bi-discord" viewBox="0 0 16 16">
+                            <path
+                                d="M13.545 2.907a13.2 13.2 0 0 0-3.257-1.011.05.05 0 0 0-.052.025c-.141.25-.297.577-.406.833a12.2 12.2 0 0 0-3.658 0 8 8 0 0 0-.412-.833.05.05 0 0 0-.052-.025c-1.125.194-2.22.534-3.257 1.011a.04.04 0 0 0-.021.018C.356 6.024-.213 9.047.066 12.032q.003.022.021.037a13.3 13.3 0 0 0 3.995 2.02.05.05 0 0 0 .056-.019q.463-.63.818-1.329a.05.05 0 0 0-.01-.059l-.018-.011a9 9 0 0 1-1.248-.595.05.05 0 0 1-.02-.066l.015-.019q.127-.095.248-.195a.05.05 0 0 1 .051-.007c2.619 1.196 5.454 1.196 8.041 0a.05.05 0 0 1 .053.007q.121.1.248.195a.05.05 0 0 1-.004.085 8 8 0 0 1-1.249.594.05.05 0 0 0-.03.03.05.05 0 0 0 .003.041c.24.465.515.909.817 1.329a.05.05 0 0 0 .056.019 13.2 13.2 0 0 0 4.001-2.02.05.05 0 0 0 .021-.037c.334-3.451-.559-6.449-2.366-9.106a.03.03 0 0 0-.02-.019" />
+                        </svg>
+                        <span class="ml-2 text-sm text-blue-600 hover:underline">Join our Discord</span>
+                    </a>
+                </div>
             </div>
             <!-- Right group: Update indicator, refresh button, etc. -->
             <div class="flex items-center gap-4">
-              <div id="updateIndicator" class="w-3 h-3 bg-green-500 rounded-full"></div>
-              <button id="refreshToggle" onclick="toggleRefresh()"
-                      class="px-4 py-2 bg-red-500 text-white rounded-lg hover:opacity-90 transition-opacity">
-                Pause Updates
-              </button>
-              <span id="status" class="text-sm text-gray-600"></span>
-              <span id="requestRate" class="text-sm font-medium bg-blue-100 text-blue-800 px-2 py-1 rounded"></span>
+                <div id="updateIndicator" class="w-3 h-3 bg-green-500 rounded-full"></div>
+
+                <!-- Pause Updates Button -->
+                <button id="refreshToggle" onclick="toggleRefresh()"
+                    class="px-4 py-2 bg-red-500 text-white rounded-lg hover:opacity-90 transition-opacity">
+                    Pause Updates
+                </button>
+
+                <!-- Dark Mode Icon Toggle Button -->
+                <button id="darkModeToggle" onclick="toggleDarkMode()"
+                    class="p-2 bg-gray-800 text-white rounded-lg hover:opacity-90 transition-opacity">
+                    <svg id="darkModeIcon" xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none"
+                        viewBox="0 0 24 24" stroke="currentColor">
+                        <path id="moonIcon" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M21 12.79A9 9 0 1111.21 3a7 7 0 009.79 9.79z" />
+                    </svg>
+                </button>
+
+                <span id="status" class="text-sm text-gray-600"></span>
+                <span id="requestRate" class="text-sm font-medium bg-blue-100 text-blue-800 px-2 py-1 rounded"></span>
             </div>
-          </div>
+        </div>
 
         <!-- Consensus Information -->
-        <div class="bg-white p-4 md:p-6 rounded-lg shadow-lg mb-6">
+        <div class="bg-white dark:bg-gray-800 p-4 md:p-6 rounded-lg shadow-lg mb-6">
             <h2 class="text-xl font-semibold mb-4">Current Top Performer</h2>
             <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div class="p-4 bg-gray-50 rounded-lg">
+                <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
                     <p class="text-sm text-gray-600">Fastest RPC</p>
                     <p id="fastestRPC" class="font-medium transition-opacity duration-150"></p>
                 </div>
-                <div class="p-4 bg-gray-50 rounded-lg">
+                <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
                     <p class="text-sm text-gray-600">Slowest RPC</p>
                     <p id="slowestRPC" class="font-medium transition-opacity duration-150"></p>
                 </div>
-                <div class="p-4 bg-gray-50 rounded-lg">
+                <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
                     <p class="text-sm text-gray-600">% Faster</p>
                     <p id="averageLatency" class="font-medium transition-opacity duration-150"></p>
                 </div>
-                <div class="p-4 bg-gray-50 rounded-lg">
+                <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
                     <p class="text-sm text-gray-600">Slot Difference</p>
                     <p id="slotDifference" class="font-medium transition-opacity duration-150"></p>
                 </div>
-                <div class="p-4 bg-gray-50 rounded-lg md:col-span-2">
+                <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg md:col-span-2">
                     <p class="text-sm text-gray-600">Consensus Blockhash</p>
                     <p id="consensusBlockhash" class="font-medium text-sm break-all transition-opacity duration-150">
                     </p>
                 </div>
-                <div class="p-4 bg-gray-50 rounded-lg">
+                <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
                     <p class="text-sm text-gray-600">Consensus Slot</p>
                     <p id="consensusSlot" class="font-medium transition-opacity duration-150"></p>
                 </div>
-                <div class="p-4 bg-gray-50 rounded-lg">
+                <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
                     <p class="text-sm text-gray-600">Consensus Level</p>
                     <p id="consensusPercentage" class="font-medium transition-opacity duration-150"></p>
                 </div>
@@ -446,21 +107,27 @@
 
         <!-- Leaderboards -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-            <div class="bg-white p-4 md:p-6 rounded-lg shadow-lg">
+            <div class="bg-white dark:bg-gray-800 p-4 md:p-6 rounded-lg shadow-lg">
                 <div id="latencyLeaderboard"></div>
             </div>
-            <div class="bg-white p-4 md:p-6 rounded-lg shadow-lg">
+            <div class="bg-white dark:bg-gray-800 p-4 md:p-6 rounded-lg shadow-lg">
                 <div id="slotLeaderboard"></div>
             </div>
         </div>
 
         <!-- Graph View -->
-        <div class="bg-white p-4 md:p-6 rounded-lg shadow-lg mb-6 relative">
+        <div class="bg-white dark:bg-gray-800 p-4 md:p-6 rounded-lg shadow-lg mb-6 relative">
             <canvas id="responseTimeChart" height="400"></canvas>
             <div id="legend" style="bottom: -10px;"
-                class="absolute left-0 right-0 bg-white bg-opacity-80 p-2 flex flex-row flex-nowrap justify-center gap-4">
+                class="absolute dark:bg-gray-800 left-0 right-0 bg-white bg-opacity-80 p-2 flex flex-row flex-nowrap justify-center gap-4">
                 <!-- Legend items will be appended here -->
             </div>
         </div>
+    </div>
+    <!-- ✅ External dark mode toggle logic -->
+    <script src="/static/darkMode.js"></script>
+    <!-- ✅ External dashboard logic -->
+    <script src="/static/dashboard.js"></script>
+</body>
 
 </html>

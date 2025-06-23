@@ -16,16 +16,6 @@ pub struct RpcEndpoint {
     pub nickname: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Config {
-    pub rpc: RpcConfig,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RpcConfig {
-    pub endpoints: Vec<RpcEndpoint>,
-}
-
 #[derive(Debug, Serialize)]
 pub struct LeaderboardEntry {
     pub nickname: String,

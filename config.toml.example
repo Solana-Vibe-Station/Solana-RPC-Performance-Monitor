@@ -1,7 +1,10 @@
 [rpc]
 endpoints = [
-    "https://api.mainnet-beta.solana.com",
-    "https://api.devnet.solana.com",
-    "https://solana-api.projectserum.com",
-    "https://rpc.ankr.com/solana"
+    { url = "https://api.mainnet-beta.solana.com", nickname = "Mainnet" },
+    { url = "https://api.devnet.solana.com", nickname = "Devnet" },
+    { url = "https://solana-api.projectserum.com", nickname = "ProjectSerum" },
+    { url = "https://rpc.ankr.com/solana", nickname = "Ankr" }
 ]
+[server]
+listen_ip = "0.0.0.0"  #"127.0.0.1" for dev, 0.0.0.0 for production
+port = 3000
