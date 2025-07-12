@@ -43,8 +43,12 @@ function updateLeaderboard(elementId, data, formatFn, title) {
         let timeStr = '';
         // Only set the time string if entry.timestamp is defined
         if (entry.timestamp) {
-            const date = new Date(entry.timestamp * 1000);
-            timeStr = date.toLocaleTimeString() + '.' + date.getMilliseconds().toString().padStart(3, '0');
+            const date = new Date(entry.timestamp);
+            timeStr =
+                `${date.getUTCHours().toString().padStart(2, '0')}:` +
+                `${date.getUTCMinutes().toString().padStart(2, '0')}:` +
+                `${date.getUTCSeconds().toString().padStart(2, '0')}.` +
+                `${date.getUTCMilliseconds().toString().padStart(3, '0')}`;
         }
         const isNewRecord = previousValues[elementId + index] !== entry.value;
         const highlightClass = isNewRecord ? 'new-record' : '';
@@ -214,7 +218,9 @@ async function fetchData() {
             legend.appendChild(legendItem);
         });
 
-        document.getElementById('status').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+        const now = new Date();
+        const utcTime = `${now.getUTCHours().toString().padStart(2, '0')}:${now.getUTCMinutes().toString().padStart(2, '0')}:${now.getUTCSeconds().toString().padStart(2, '0')}.${now.getUTCMilliseconds().toString().padStart(3, '0')}`;
+        document.getElementById('status').textContent = `Last updated (UTC): ${utcTime}`;
     } catch (error) {
         console.error('Error fetching data:', error);
         document.getElementById('status').textContent = 'Error updating data';

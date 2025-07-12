@@ -130,17 +130,17 @@ pub async fn get_metrics(
                 }
 
                 if let Some((url, _)) = key_str.split_once(':') {
-                    let matches_rpc = rpc_filter
-                        .as_ref()
-                        .map_or(true, |filter| url.contains(filter.as_str()));
-                    let matches_time = match (from_ts, to_ts) {
-                        (Some(from), Some(to)) => {
-                            response.timestamp >= from as f64 && response.timestamp <= to as f64
-                        }
-                        (Some(from), None) => response.timestamp >= from as f64,
-                        (None, Some(to)) => response.timestamp <= to as f64,
-                        (None, None) => true,
-                    };
+                let matches_rpc = rpc_filter
+                    .as_ref()
+                    .map_or(true, |filter| url.contains(filter.as_str()));
+                let matches_time = match (from_ts, to_ts) {
+                    (Some(from), Some(to)) => {
+                        response.timestamp >= from && response.timestamp <= to
+                    }
+                    (Some(from), None) => response.timestamp >= from,
+                    (None, Some(to)) => response.timestamp <= to,
+                    (None, None) => true,
+                };
 
                     if matches_rpc && matches_time {
                         responses.push(response);

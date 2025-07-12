@@ -51,7 +51,7 @@ async fn cleanup_old_entries(db: Arc<DB>) -> Result<(), Box<dyn std::error::Erro
     for item in db.iterator(rocksdb::IteratorMode::Start) {
         if let Ok((key, value)) = item {
             if let Ok(response) = serde_json::from_slice::<RPCResponse>(&value) {
-                if response.timestamp < one_hour_ago_ts as f64 {
+                if response.timestamp < one_hour_ago_ts {
                     batch.delete(key);
                 }
             }
