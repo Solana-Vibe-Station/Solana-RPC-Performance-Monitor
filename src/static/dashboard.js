@@ -34,36 +34,41 @@ function updateLeaderboard(elementId, data, formatFn, title) {
         });
         data.sort((a, b) => {
             if (b.value === a.value) {
-                return a.latency_ms - b.latency_ms;
+                return a.total_latency_ms - b.total_latency_ms;
             }
             return b.value - a.value;
         });
+    } else if (title === 'Fastest Response Times') {
+        data.sort((a, b) => {
+            // Use latency_ms if it exists, else fallback to total_latency_ms
+            const aLatency = a.latency_ms !== undefined ? a.latency_ms : a.total_latency_ms;
+            const bLatency = b.latency_ms !== undefined ? b.latency_ms : b.total_latency_ms;
+            return aLatency - bLatency;
+        });
     }
+
     data.forEach((entry, index) => {
         let timeStr = '';
-        // Only set the time string if entry.timestamp is defined
         if (entry.timestamp) {
             const date = new Date(entry.timestamp);
-            timeStr =
-                `${date.getUTCHours().toString().padStart(2, '0')}:` +
-                `${date.getUTCMinutes().toString().padStart(2, '0')}:` +
-                `${date.getUTCSeconds().toString().padStart(2, '0')}.` +
-                `${date.getUTCMilliseconds().toString().padStart(3, '0')}`;
+            timeStr = date.toLocaleTimeString() + '.' + date.getMilliseconds().toString().padStart(3, '0');
         }
-        const isNewRecord = previousValues[elementId + index] !== entry.value;
+        const key = elementId + index;
+        const isNewRecord = previousValues[key] !== entry.value;
         const highlightClass = isNewRecord ? 'new-record' : '';
-        previousValues[elementId + index] = entry.value;
+        previousValues[key] = entry.value;
 
         html += `
 <div class="flex items-center justify-between mb-2 ${highlightClass} ${index === 0 ? 'text-green-600 font-medium' : ''} p-2 rounded">
-<span class="flex-grow">${index + 1}. ${formatFn(entry)}</span>
-<span class="text-sm text-gray-500">${timeStr}</span>
+  <span class="flex-grow">${index + 1}. ${formatFn(entry)}</span>
+  <span class="text-sm text-gray-500">${timeStr}</span>
 </div>
 `;
     });
 
     element.innerHTML = html;
 }
+
 
 function updateYAxisMax() {
     const visibleDatasets = responseTimeChart.data.datasets.filter(dataset => !dataset.hidden);
@@ -100,13 +105,13 @@ async function fetchData() {
 
         // Update leaderboards
         updateLeaderboard('latencyLeaderboard', consensus.latency_leaderboard,
-            entry => `${entry.nickname}: ${entry.value}ms`,
+            entry => `${entry.nickname}: ${entry.latency_ms}ms`,
             'Fastest Response Times');
         // Calculate average response time per endpoint from raw data
         const nicknames = [...new Set(data.map(item => item.nickname))].sort();
         const avgResponseTimes = nicknames.map(nickname => {
             const endpointData = data.filter(item => item.nickname === nickname);
-            const totalLatency = endpointData.reduce((sum, item) => sum + item.latency_ms, 0);
+            const totalLatency = endpointData.reduce((sum, item) => sum + item.total_latency_ms, 0);
             const avgLatency = endpointData.length > 0 ? totalLatency / endpointData.length : 0;
             return {
                 nickname,
@@ -132,7 +137,7 @@ async function fetchData() {
             return {
                 label: nickname,
                 data: data.filter(item => item.nickname === nickname).map(item => ({
-                    x: new Date(item.timestamp * 1000),
+                    x: new Date(item.timestamp),
                     y: item.latency_ms
                 })),
                 borderColor: color,
@@ -218,9 +223,7 @@ async function fetchData() {
             legend.appendChild(legendItem);
         });
 
-        const now = new Date();
-        const utcTime = `${now.getUTCHours().toString().padStart(2, '0')}:${now.getUTCMinutes().toString().padStart(2, '0')}:${now.getUTCSeconds().toString().padStart(2, '0')}.${now.getUTCMilliseconds().toString().padStart(3, '0')}`;
-        document.getElementById('status').textContent = `Last updated (UTC): ${utcTime}`;
+        document.getElementById('status').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
     } catch (error) {
         console.error('Error fetching data:', error);
         document.getElementById('status').textContent = 'Error updating data';

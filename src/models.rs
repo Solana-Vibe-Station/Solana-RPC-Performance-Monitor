@@ -6,6 +6,7 @@ pub struct RPCResponse {
     pub slot: u64,
     pub blockhash: String,
     pub latency_ms: u128,
+    pub total_latency_ms: u128, 
     pub rpc_url: String,
     pub nickname: String,
 }
