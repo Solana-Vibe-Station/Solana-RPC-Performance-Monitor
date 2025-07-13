@@ -9,7 +9,13 @@ use std::sync::Arc;
 use crate::models::{ConsensusStats, LeaderboardEntry, RPCResponse};
 
 pub fn calculate_consensus(responses: &[RPCResponse]) -> ConsensusStats {
-    if responses.is_empty() {
+    // Filter out invalid responses
+    let valid_responses: Vec<&RPCResponse> = responses
+        .iter()
+        .filter(|r| r.slot > 0 && r.blockhash != "Unavailable" && r.latency_ms > 0)
+        .collect();
+
+    if valid_responses.is_empty() {
         return ConsensusStats {
             fastest_rpc: String::from("No data"),
             slowest_rpc: String::from("No data"),
@@ -29,12 +35,10 @@ pub fn calculate_consensus(responses: &[RPCResponse]) -> ConsensusStats {
 
     let mut blockhash_counts: HashMap<String, usize> = HashMap::new();
     let mut slot_counts: HashMap<u64, usize> = HashMap::new();
-    let total_rpcs = responses.len();
+    let total_rpcs = valid_responses.len();
 
-    for response in responses {
-        *blockhash_counts
-            .entry(response.blockhash.clone())
-            .or_insert(0) += 1;
+    for response in &valid_responses {
+        *blockhash_counts.entry(response.blockhash.clone()).or_insert(0) += 1;
         *slot_counts.entry(response.slot).or_insert(0) += 1;
     }
 
@@ -52,9 +56,8 @@ pub fn calculate_consensus(responses: &[RPCResponse]) -> ConsensusStats {
 
     let consensus_percentage = (consensus_blockhash.1 as f64 / total_rpcs as f64) * 100.0;
 
-    let fastest = responses.iter().min_by_key(|r| r.latency_ms).unwrap();
-
-    let slowest = responses.iter().max_by_key(|r| r.latency_ms).unwrap();
+    let fastest = valid_responses.iter().min_by_key(|r| r.latency_ms).unwrap();
+    let slowest = valid_responses.iter().max_by_key(|r| r.latency_ms).unwrap();
 
     let slot_difference = fastest.slot as i64 - slowest.slot as i64;
     let slot_skew = if slot_difference == 0 {
@@ -66,9 +69,9 @@ pub fn calculate_consensus(responses: &[RPCResponse]) -> ConsensusStats {
     };
 
     let average_latency =
-        responses.iter().map(|r| r.latency_ms as f64).sum::<f64>() / total_rpcs as f64;
+        valid_responses.iter().map(|r| r.latency_ms as f64).sum::<f64>() / total_rpcs as f64;
 
-    let mut latency_leaderboard: Vec<LeaderboardEntry> = responses
+    let mut latency_leaderboard: Vec<LeaderboardEntry> = valid_responses
         .iter()
         .map(|r| LeaderboardEntry {
             nickname: r.nickname.clone(),
@@ -80,7 +83,7 @@ pub fn calculate_consensus(responses: &[RPCResponse]) -> ConsensusStats {
     latency_leaderboard.sort_by_key(|entry| entry.value);
     latency_leaderboard.truncate(4);
 
-    let mut slot_leaderboard: Vec<LeaderboardEntry> = responses
+    let mut slot_leaderboard: Vec<LeaderboardEntry> = valid_responses
         .iter()
         .map(|r| LeaderboardEntry {
             nickname: r.nickname.clone(),
@@ -125,22 +128,27 @@ pub async fn get_metrics(
         if let Ok((key, value)) = item {
             let key_str = String::from_utf8_lossy(&key);
             if let Ok(response) = serde_json::from_slice::<RPCResponse>(&value) {
-                if !latest_by_rpc.contains_key(&response.rpc_url) {
-                    latest_by_rpc.insert(response.rpc_url.clone(), response.clone());
-                }
+                latest_by_rpc
+                .entry(response.nickname.clone())
+                .and_modify(|existing| {
+                    if response.timestamp > existing.timestamp {
+                        *existing = response.clone();
+                    }
+                })
+                .or_insert_with(|| response.clone());
 
                 if let Some((url, _)) = key_str.split_once(':') {
-                    let matches_rpc = rpc_filter
-                        .as_ref()
-                        .map_or(true, |filter| url.contains(filter.as_str()));
-                    let matches_time = match (from_ts, to_ts) {
-                        (Some(from), Some(to)) => {
-                            response.timestamp >= from as f64 && response.timestamp <= to as f64
-                        }
-                        (Some(from), None) => response.timestamp >= from as f64,
-                        (None, Some(to)) => response.timestamp <= to as f64,
-                        (None, None) => true,
-                    };
+                let matches_rpc = rpc_filter
+                    .as_ref()
+                    .map_or(true, |filter| url.contains(filter.as_str()));
+                let matches_time = match (from_ts, to_ts) {
+                    (Some(from), Some(to)) => {
+                        response.timestamp >= from && response.timestamp <= to
+                    }
+                    (Some(from), None) => response.timestamp >= from,
+                    (None, Some(to)) => response.timestamp <= to,
+                    (None, None) => true,
+                };
 
                     if matches_rpc && matches_time {
                         responses.push(response);

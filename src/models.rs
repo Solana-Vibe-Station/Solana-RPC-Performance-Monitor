@@ -2,10 +2,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RPCResponse {
-    pub timestamp: f64,
+    pub timestamp: i64,
     pub slot: u64,
     pub blockhash: String,
     pub latency_ms: u128,
+    pub total_latency_ms: u128, 
     pub rpc_url: String,
     pub nickname: String,
 }
@@ -21,7 +22,7 @@ pub struct LeaderboardEntry {
     pub nickname: String,
     pub value: u64,
     pub latency_ms: u128,
-    pub timestamp: f64,
+    pub timestamp: i64,
 }
 
 #[derive(Debug, Serialize)]

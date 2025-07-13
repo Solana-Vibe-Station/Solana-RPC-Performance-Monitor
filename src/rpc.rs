@@ -15,26 +15,26 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static HTTP2_REQUESTS: AtomicU64 = AtomicU64::new(0);
 static FALLBACK_REQUESTS: AtomicU64 = AtomicU64::new(0);
 
-// Global HTTP/2 client with connection pooling
+// Global HTTP/2 client
 static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
     reqwest::ClientBuilder::new()
-        .pool_idle_timeout(Duration::from_secs(300))  
-        .pool_max_idle_per_host(20)                   
+        .pool_idle_timeout(Duration::from_secs(300))
+        .pool_max_idle_per_host(20)
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))
-        .tcp_keepalive(Duration::from_secs(30))       
-        .http2_keep_alive_interval(Duration::from_secs(30))  
-        .http2_keep_alive_timeout(Duration::from_secs(10))   
-        .http2_keep_alive_while_idle(true)            
+        .tcp_keepalive(Duration::from_secs(30))
+        .http2_keep_alive_interval(Duration::from_secs(30))
+        .http2_keep_alive_timeout(Duration::from_secs(10))
+        .http2_keep_alive_while_idle(true)
         .user_agent("solana-rpc-monitor/1.0")
         .build()
-        .expect("Failed to create HTTP client")
+        .expect("Failed to create HTTP/2 client")
 });
 
-// HTTP/1.1 only client for comparison
+// HTTP/1.1 client fallback
 static HTTP1_CLIENT: Lazy<Client> = Lazy::new(|| {
     reqwest::ClientBuilder::new()
-        .http1_only()                                 
+        .http1_only()
         .pool_idle_timeout(Duration::from_secs(300))
         .pool_max_idle_per_host(20)
         .timeout(Duration::from_secs(30))
@@ -67,7 +67,12 @@ struct JsonRpcError {
     message: String,
 }
 
-async fn rpc_call_with_precise_timing<T>(url: &str, method: &str, params: Option<Value>, prefer_http2: bool) -> Result<(T, u128), String>
+async fn rpc_call_with_precise_timing<T>(
+    url: &str,
+    method: &str,
+    params: Option<Value>,
+    prefer_http2: bool
+) -> Result<(T, u128), String>
 where
     T: for<'de> Deserialize<'de>,
 {
@@ -78,33 +83,23 @@ where
         params,
     };
 
-    let client = if prefer_http2 {
-        &HTTP_CLIENT
-    } else {
-        &HTTP1_CLIENT
-    };
-
-    // Pre-serialize to avoid timing serialization overhead
+    let client = if prefer_http2 { &HTTP_CLIENT } else { &HTTP1_CLIENT };
     let request_body = serde_json::to_string(&request).map_err(|e| e.to_string())?;
 
-    // Measure ONLY the network round trip (like OpenResty does)
     let precise_start = Instant::now();
     let response = client
         .post(url)
         .header("Content-Type", "application/json")
-        .body(request_body)  // Use pre-serialized body
+        .body(request_body)
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    
-    // Stop timing immediately after response received
     let precise_latency = precise_start.elapsed().as_millis();
 
     if !response.status().is_success() {
         return Err(format!("HTTP error: {}", response.status()));
     }
 
-    // Parse JSON outside of timing measurement
     let response_text = response.text().await.map_err(|e| e.to_string())?;
     let rpc_response: JsonRpcResponse<T> = serde_json::from_str(&response_text).map_err(|e| e.to_string())?;
 
@@ -112,23 +107,17 @@ where
         return Err(format!("RPC error {}: {}", error.code, error.message));
     }
 
-    let result = rpc_response
-        .result
-        .ok_or_else(|| "Missing result in RPC response".to_string())?;
-
+    let result = rpc_response.result.ok_or_else(|| "Missing result in RPC response".to_string())?;
     Ok((result, precise_latency))
 }
 
-// Version that makes individual timed requests instead of concurrent
 async fn get_single_request_timing(url: &str, prefer_http2: bool) -> Result<u128, String> {
-    // Just measure a single getHealth call to get pure network timing
     let (_result, timing): (Value, u128) = rpc_call_with_precise_timing(
         url,
         "getHealth",
         None,
         prefer_http2,
     ).await?;
-    
     Ok(timing)
 }
 
@@ -148,8 +137,7 @@ async fn get_latest_blockhash_http2(url: &str, prefer_http2: bool) -> Result<(St
         "getLatestBlockhash",
         Some(json!([{"commitment": "finalized"}])),
         prefer_http2,
-    )
-    .await?;
+    ).await?;
 
     Ok((response.value.blockhash, network_latency))
 }
@@ -160,14 +148,11 @@ async fn get_slot_http2(url: &str, prefer_http2: bool) -> Result<(u64, u128), St
         "getSlot",
         Some(json!([{"commitment": "finalized"}])),
         prefer_http2,
-    )
-    .await?;
-
+    ).await?;
     Ok((slot, network_latency))
 }
 
 async fn fetch_both_http2(url: &str, prefer_http2: bool) -> Result<(String, u64, u128), String> {
-    // Make both requests concurrently using the same connection pool
     let (blockhash_result, slot_result) = tokio::join!(
         get_latest_blockhash_http2(url, prefer_http2),
         get_slot_http2(url, prefer_http2)
@@ -175,107 +160,101 @@ async fn fetch_both_http2(url: &str, prefer_http2: bool) -> Result<(String, u64,
 
     let (blockhash, blockhash_latency) = blockhash_result?;
     let (slot, slot_latency) = slot_result?;
-
-    // Since requests run concurrently, the effective latency is the maximum of the two
-    let effective_latency = std::cmp::max(blockhash_latency, slot_latency);
+    let effective_latency = std::cmp::max(blockhash_latency, slot_latency); // Worst-case latency
 
     Ok((blockhash, slot, effective_latency))
 }
 
-// Enhanced function with HTTP/2 connection reuse and OpenResty-accurate timing
 pub async fn fetch_blockhash_and_slot(
     endpoint: RpcEndpoint,
     db: Arc<DB>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    
-    // Strategy: Get the data we need, but measure timing separately to match OpenResty
-    let (blockhash, slot) = match fetch_both_http2(&endpoint.url, true).await {
-        Ok((hash, slot_num, _)) => {  // Ignore the internal timing
+    let start_time = Instant::now();
+
+    let (blockhash, slot, used_legacy) = match fetch_both_http2(&endpoint.url, true).await {
+        Ok((hash, slot_num, _)) => {
             HTTP2_REQUESTS.fetch_add(1, Ordering::Relaxed);
-            (hash, slot_num)
+            (hash, slot_num, false)
         }
         Err(e) => {
-            // Try HTTP/1.1 with connection reuse
+            eprintln!("[{}] HTTP/2 failed: {}", endpoint.nickname, e);
             match fetch_both_http2(&endpoint.url, false).await {
-                Ok((hash, slot_num, _)) => {  // Ignore the internal timing
-                    if HTTP2_REQUESTS.load(Ordering::Relaxed) < 5 {
-                        eprintln!("[{}] HTTP/2 failed, using HTTP/1.1: {}", endpoint.nickname, e);
-                    }
+                Ok((hash, slot_num, _)) => {
                     FALLBACK_REQUESTS.fetch_add(1, Ordering::Relaxed);
-                    (hash, slot_num)
+                    (hash, slot_num, false)
                 }
                 Err(_) => {
-                    // Final fallback to original solana_client
-                    eprintln!("[{}] Both HTTP/2 and HTTP/1.1 failed, using legacy client", endpoint.nickname);
-                    
                     let client = RpcClient::new(endpoint.url.clone());
-                    
-                    let blockhash = match client.get_latest_blockhash() {
-                        Ok(hash) => hash.to_string(),
-                        Err(_) => "Unavailable".to_string(),
-                    };
-                    
-                    let slot = match client.get_slot() {
-                        Ok(slot) => slot,
-                        Err(_) => {
-                            println!(
-                                "Error fetching slot from {}: request failed",
-                                endpoint.nickname
-                            );
-                            0
-                        }
-                    };
-                    
-                    (blockhash, slot)
+                    let blockhash = client.get_latest_blockhash().map(|h| h.to_string()).unwrap_or("Unavailable".to_string());
+                    let slot = client.get_slot().unwrap_or(0);
+                    (blockhash, slot, true)
                 }
             }
         }
     };
-    
-    // Get a separate, precise timing measurement that matches OpenResty
-    let latency = match get_single_request_timing(&endpoint.url, true).await {
-        Ok(precise_timing) => precise_timing,
-        Err(_) => {
-            // Fallback timing measurement
-            match get_single_request_timing(&endpoint.url, false).await {
+
+    let precise_latency = if used_legacy {
+        match get_single_request_timing(&endpoint.url, false).await {
+            Ok(timing) => timing,
+            Err(_) => 999,
+        }
+    } else {
+        match get_single_request_timing(&endpoint.url, true).await {
+            Ok(timing) => timing,
+            Err(_) => match get_single_request_timing(&endpoint.url, false).await {
                 Ok(timing) => timing,
-                Err(_) => 1, // Default fallback
-            }
+                Err(_) => 999,
+            },
         }
     };
-    
-    // Log connection stats every 50 requests
+
     let total_requests = HTTP2_REQUESTS.load(Ordering::Relaxed) + FALLBACK_REQUESTS.load(Ordering::Relaxed);
-    if total_requests % 50 == 0 && total_requests > 0 {
+    if total_requests % 50 == 0 {
         let http2_ratio = (HTTP2_REQUESTS.load(Ordering::Relaxed) * 100) / total_requests;
-        println!("Protocol stats: {}% HTTP/2, {}% HTTP/1.1+Legacy ({} total) [{}]", 
-            http2_ratio, 
+        println!(
+            "[{}] [{}] Protocol stats: {}% HTTP/2, {}% HTTP/1.1+Legacy ({} total)",
+            Utc::now().to_rfc3339(),
+            endpoint.nickname,
+            http2_ratio,
             100 - http2_ratio,
-            total_requests,
-            endpoint.nickname
+            total_requests
         );
     }
-    
+
+    let total_latency = start_time.elapsed().as_millis();
+    let request_start = Utc::now();
+
     let response = RPCResponse {
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64(),
+        timestamp: request_start.timestamp_millis(),
         slot,
         blockhash: blockhash.clone(),
-        latency_ms: latency,
+        latency_ms: precise_latency,
+        total_latency_ms: total_latency,
         rpc_url: endpoint.url.clone(),
         nickname: endpoint.nickname.clone(),
     };
-    
+
+    if response.slot == 0 || response.blockhash == "Unavailable" {
+        eprintln!(
+            "[{}] Skipping invalid response (slot: {}, blockhash: {})",
+            endpoint.nickname, response.slot, response.blockhash
+        );
+        return Ok(());
+    }
+
     let key = format!("{}:{}", endpoint.nickname, Utc::now().timestamp());
     let value = serde_json::to_string(&response)?;
     db.put(key.as_bytes(), value.as_bytes())?;
-    
+
     println!(
-        "[{}] Slot: {}, Blockhash: {} ({}ms)",
-        endpoint.nickname, slot, blockhash, latency
+        "[{}] [{}] Slot: {}, Blockhash: {} (precise={}ms, total={}ms)",
+        Utc::now().to_rfc3339(),
+        endpoint.nickname,
+        slot,
+        blockhash,
+        precise_latency,
+        total_latency
     );
-    
+
     Ok(())
 }
